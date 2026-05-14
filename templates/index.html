@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Comment Sentiment Analyzer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; }
+        .container { max-width: 800px; margin-top: 50px; }
+        .card { border-radius: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .btn-primary { background-color: #ff0000; border-color: #ff0000; }
+        .btn-primary:hover { background-color: #cc0000; border-color: #cc0000; }
+        .btn-success { background-color: #28a745; border-color: #28a745; }
+        .mode-option { cursor: pointer; padding: 10px; border-radius: 8px; margin-bottom: 5px; }
+        .mode-option:hover { background-color: #e9ecef; }
+        .mode-selected { background-color: #007bff20; border-left: 3px solid #007bff; }
+        .nav-tabs .nav-link { cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="card-header bg-primary text-white text-center">
+                <h3>Comment Sentiment Analyzer</h3>
+                <p class="mb-0">Analyze sentiment from YouTube URL or JSON file</p>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Analysis Method:</label>
+                    <div>
+                        <div id="modeTextBlob" class="mode-option mode-selected" data-mode="textblob">
+                            <input type="radio" name="mode" value="textblob" checked> <strong>TextBlob</strong> <span class="text-muted">(faster)</span>
+                        </div>
+                        <div id="modeHuggingFace" class="mode-option" data-mode="huggingface">
+                            <input type="radio" name="mode" value="huggingface"> <strong>Hugging Face</strong> <span class="text-muted">(more accurate)</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <ul class="nav nav-tabs" id="inputTab" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="url-tab" data-bs-toggle="tab" data-bs-target="#url-pane" type="button" role="tab">
+                            YouTube URL
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="json-tab" data-bs-toggle="tab" data-bs-target="#json-pane" type="button" role="tab">
+                            Upload JSON
+                        </button>
+                    </li>
+                </ul>
+                
+                <div class="tab-content mt-3">
+                    <div class="tab-pane fade show active" id="url-pane" role="tabpanel">
+                        <form id="urlForm">
+                            <div class="mb-3">
+                                <label for="url" class="form-label">YouTube URL</label>
+                                <input type="url" class="form-control" id="url" 
+                                       placeholder="https://www.youtube.com/watch?v=..." required>
+                                <small class="form-text text-muted">
+                                    Enter any YouTube video URL
+                                </small>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100">Analyze</button>
+                        </form>
+                    </div>
+                    
+                    <div class="tab-pane fade" id="json-pane" role="tabpanel">
+                        <form id="jsonForm" enctype="multipart/form-data">
+                            <div class="mb-3">
+                                <label for="json_file" class="form-label">JSON File</label>
+                                <input type="file" class="form-control" id="json_file" accept=".json" required>
+                                <small class="form-text text-muted">
+                                    Format: {"comments": [{"author": "name", "comment": "text"}]}
+                                </small>
+                            </div>
+                            <button type="submit" class="btn btn-success w-100">Analyze</button>
+                        </form>
+                    </div>
+                </div>
+                
+                <div id="progressContainer" style="display: none;" class="mt-4">
+                    <div class="progress">
+                        <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" 
+                             style="width: 0%">0%</div>
+                    </div>
+                    <p id="statusMessage" class="mt-2 text-muted text-center"></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let currentMode = 'textblob';
+        
+        // Mode selection
+        document.getElementById('modeTextBlob').addEventListener('click', function() {
+            document.getElementById('modeTextBlob').classList.add('mode-selected');
+            document.getElementById('modeHuggingFace').classList.remove('mode-selected');
+            document.querySelector('#modeTextBlob input').checked = true;
+            document.querySelector('#modeHuggingFace input').checked = false;
+            currentMode = 'textblob';
+        });
+        
+        document.getElementById('modeHuggingFace').addEventListener('click', function() {
+            document.getElementById('modeHuggingFace').classList.add('mode-selected');
+            document.getElementById('modeTextBlob').classList.remove('mode-selected');
+            document.querySelector('#modeHuggingFace input').checked = true;
+            document.querySelector('#modeTextBlob input').checked = false;
+            currentMode = 'huggingface';
+        });
+        
+        let statusInterval = null;
+        
+        function startProgressMonitoring(jobId) {
+            const progressBar = document.getElementById('progressBar');
+            const statusMessage = document.getElementById('statusMessage');
+            
+            if (statusInterval) clearInterval(statusInterval);
+            
+            statusInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/status/${jobId}`);
+                    const status = await response.json();
+                    
+                    progressBar.style.width = `${status.progress}%`;
+                    progressBar.textContent = `${status.progress}%`;
+                    
+                    if (status.status === 'running') {
+                        if (status.progress < 40) {
+                            statusMessage.textContent = 'Processing comments...';
+                        } else {
+                            statusMessage.textContent = 'Analyzing sentiment...';
+                        }
+                    } else if (status.status === 'completed') {
+                        clearInterval(statusInterval);
+                        window.location.href = `/view/${jobId}`;
+                    } else if (status.status === 'failed') {
+                        clearInterval(statusInterval);
+                        alert('Analysis failed: ' + status.error);
+                        resetForm();
+                    }
+                } catch (error) {
+                    console.error('Status check error:', error);
+                }
+            }, 2000);
+        }
+        
+        function resetForm() {
+            const submitBtn = document.querySelector('#urlForm button, #jsonForm button');
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = submitBtn.classList.contains('btn-primary') ? 'Analyze' : 'Analyze';
+            }
+            document.getElementById('progressContainer').style.display = 'none';
+            if (statusInterval) clearInterval(statusInterval);
+        }
+        
+        // URL Form Handler - Send as JSON
+        document.getElementById('urlForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const url = document.getElementById('url').value;
+            const submitBtn = this.querySelector('button');
+            const progressContainer = document.getElementById('progressContainer');
+            
+            if (!url) {
+                alert('Please enter a YouTube URL');
+                return;
+            }
+            
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = 'Starting...';
+            progressContainer.style.display = 'block';
+            
+            try {
+                const response = await fetch('/analyze', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        url: url,
+                        mode: currentMode
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    alert(data.error);
+                    resetForm();
+                    return;
+                }
+                
+                startProgressMonitoring(data.job_id);
+                
+            } catch (error) {
+                alert('Error: ' + error.message);
+                resetForm();
+            }
+        });
+        
+        // JSON Form Handler - Send as FormData
+        document.getElementById('jsonForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const fileInput = document.getElementById('json_file');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                alert('Please select a JSON file');
+                return;
+            }
+            
+            const submitBtn = this.querySelector('button');
+            const progressContainer = document.getElementById('progressContainer');
+            
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = 'Uploading...';
+            progressContainer.style.display = 'block';
+            
+            const formData = new FormData();
+            formData.append('json_file', file);
+            formData.append('mode', currentMode);
+            
+            try {
+                const response = await fetch('/analyze', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    alert(data.error);
+                    resetForm();
+                    return;
+                }
+                
+                startProgressMonitoring(data.job_id);
+                
+            } catch (error) {
+                alert('Error: ' + error.message);
+                resetForm();
+            }
+        });
+    </script>
+</body>
+</html>

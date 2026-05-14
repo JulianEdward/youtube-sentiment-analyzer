@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sentiment Analysis Results</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background-color: #f8f9fa; }
+        .container { max-width: 1400px; margin-top: 30px; }
+        .card { border-radius: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .sentiment-positive { border-left: 4px solid #28a745; background-color: #f0fff0; }
+        .sentiment-negative { border-left: 4px solid #dc3545; background-color: #fff0f0; }
+        .sentiment-neutral { border-left: 4px solid #6c757d; background-color: #f8f9fa; }
+        .badge-positive { background-color: #28a745; }
+        .badge-negative { background-color: #dc3545; }
+        .badge-neutral { background-color: #6c757d; }
+        .comment-text { white-space: normal; word-wrap: break-word; max-width: 500px; }
+        .table td { vertical-align: middle; }
+        .table th { background-color: #f8f9fa; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="loadingDiv" class="text-center py-5">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="mt-2">Loading results...</p>
+        </div>
+        
+        <div id="resultsDiv" style="display: none;"></div>
+    </div>
+
+    <script>
+        const jobId = '{{ job_id }}';
+        
+        async function loadResults() {
+            try {
+                const response = await fetch('/results/' + jobId);
+                const data = await response.json();
+                
+                if (data.error) {
+                    document.getElementById('loadingDiv').innerHTML = 
+                        '<div class="alert alert-danger">' + data.error + '</div>';
+                    return;
+                }
+                
+                displayResults(data);
+                
+            } catch (error) {
+                document.getElementById('loadingDiv').innerHTML = 
+                    '<div class="alert alert-danger">Error loading results</div>';
+            }
+        }
+        
+        function displayResults(data) {
+            document.getElementById('loadingDiv').style.display = 'none';
+            const resultsDiv = document.getElementById('resultsDiv');
+            resultsDiv.style.display = 'block';
+            
+            const stats = data.stats;
+            const comments = data.comments;
+            const sourceType = data.source_type;
+            const mode = data.mode === 'textblob' ? 'TextBlob (faster)' : 'Hugging Face (more accurate)';
+            
+            let tableRows = '';
+            for (let i = 0; i < comments.length; i++) {
+                const comment = comments[i];
+                const polarity = comment.polarity;
+                const polarityDisplay = polarity.toFixed(3);
+                
+                tableRows += `
+                    <tr class="sentiment-${comment.sentiment}">
+                        <td class="text-center">${i + 1}</td>
+                        <td><strong>${escapeHtml(comment.author)}</strong></td>
+                        <td class="text-center">
+                            <span class="badge badge-${comment.sentiment}">
+                                ${comment.sentiment}
+                            </span>
+                        </td>
+                        <td class="text-center">${polarityDisplay}</td>
+                        <td class="comment-text">${escapeHtml(comment.comment)}</td>
+                    </tr>
+                `;
+            }
+            
+            const html = `
+                <div class="card">
+                    <div class="card-header bg-primary text-white">
+                        <h4 class="mb-0">Sentiment Analysis Results</h4>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <p><strong>Source:</strong> ${escapeHtml(data.source)}</p>
+                                <p><strong>Source Type:</strong> ${sourceType === 'url' ? 'YouTube URL' : 'JSON Upload'}</p>
+                                <p><strong>Analysis Method:</strong> ${mode}</p>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="alert alert-info">
+                                    <strong>Summary:</strong> ${stats.total} comments analyzed
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="row mt-4">
+                            <div class="col-md-6">
+                                <h5>Statistics</h5>
+                                <table class="table table-bordered">
+                                    <tr>
+                                        <th>Total Comments</th>
+                                        <td class="text-end"><strong>${stats.total}</strong></td>
+                                    </tr>
+                                    <tr class="table-success">
+                                        <th>Positive</th>
+                                        <td class="text-end"><strong>${stats.positive}</strong> (${stats.positive_percent}%)</td>
+                                    </tr>
+                                    <tr class="table-danger">
+                                        <th>Negative</th>
+                                        <td class="text-end"><strong>${stats.negative}</strong> (${stats.negative_percent}%)</td>
+                                    </tr>
+                                    <tr class="table-secondary">
+                                        <th>Neutral</th>
+                                        <td class="text-end"><strong>${stats.neutral}</strong> (${stats.neutral_percent}%)</td>
+                                    </tr>
+                                    <tr>
+                                        <th>Average Polarity</th>
+                                        <td class="text-end"><strong>${stats.avg_polarity}</strong></td>
+                                    </tr>
+                                </table>
+                            </div>
+                            <div class="col-md-6">
+                                <canvas id="sentimentChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-header bg-secondary text-white d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">Comments (${comments.length})</h5>
+                        <input type="text" id="searchInput" class="form-control form-control-sm" placeholder="Search comments..." style="width: 250px;">
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-hover mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th style="width: 50px;">#</th>
+                                        <th style="width: 150px;">Author</th>
+                                        <th style="width: 100px;">Sentiment</th>
+                                        <th style="width: 80px;">Polarity</th>
+                                        <th>Comment</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="commentsBody">
+                                    ${tableRows}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="text-center mb-4 mt-3">
+                    <a href="/export/${jobId}" class="btn btn-success me-2">
+                        Export as JSON
+                    </a>
+                    <a href="/" class="btn btn-primary">
+                        New Analysis
+                    </a>
+                </div>
+            `;
+            
+            resultsDiv.innerHTML = html;
+            
+            // Create chart
+            const ctx = document.getElementById('sentimentChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Positive', 'Negative', 'Neutral'],
+                    datasets: [{
+                        data: [stats.positive, stats.negative, stats.neutral],
+                        backgroundColor: ['#28a745', '#dc3545', '#6c757d'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: { position: 'bottom' }
+                    }
+                }
+            });
+            
+            // Search functionality
+            document.getElementById('searchInput').addEventListener('keyup', function() {
+                const searchTerm = this.value.toLowerCase();
+                const rows = document.querySelectorAll('#commentsBody tr');
+                
+                rows.forEach(row => {
+                    const text = row.innerText.toLowerCase();
+                    if (text.includes(searchTerm)) {
+                        row.style.display = '';
+                    } else {
+                        row.style.display = 'none';
+                    }
+                });
+            });
+        }
+        
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        loadResults();
+    </script>
+</body>
+</html>
